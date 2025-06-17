@@ -1,5 +1,5 @@
 # app.py
-from fastapi import FastAPI, Request
+from fastapi import FastAPI
 from pydantic import BaseModel
 from transformers import BertTokenizerFast, BertForTokenClassification
 import torch
@@ -9,13 +9,28 @@ model_path = "./ner_model"
 tokenizer = BertTokenizerFast.from_pretrained(model_path)
 model = BertForTokenClassification.from_pretrained(model_path)
 
-# Load tag2id and id2tag
-unique_tags = sorted(tokenizer.get_vocab().keys())  # You can also save/load tag2id
-# For now, assume same tag2id/id2tag as training
-tag2id = {tag: idx for idx, tag in enumerate(model.config.id2label.values())}
-id2tag = {v: k for k, v in tag2id.items()}
+# id2tag mapping — must match training
+id2tag = {
+    0: 'B-art',
+    1: 'B-eve',
+    2: 'B-geo',
+    3: 'B-gpe',
+    4: 'B-nat',
+    5: 'B-org',
+    6: 'B-per',
+    7: 'B-tim',
+    8: 'I-art',
+    9: 'I-eve',
+    10: 'I-geo',
+    11: 'I-gpe',
+    12: 'I-nat',
+    13: 'I-org',
+    14: 'I-per',
+    15: 'I-tim',
+    16: 'O'
+}
 
-# FastAPI App
+# FastAPI app
 app = FastAPI()
 
 # Request model
@@ -25,10 +40,10 @@ class NERRequest(BaseModel):
 # Inference Endpoint
 @app.post("/predict")
 async def predict(req: NERRequest):
-    sentence = req.sentence.strip().split()  # split into tokens
+    sentence = req.sentence.strip()
 
-    # Tokenize input
-    inputs = tokenizer([sentence], is_split_into_words=True, return_tensors="pt")
+    # Tokenize
+    inputs = tokenizer(sentence, return_tensors="pt")
 
     # Predict
     with torch.no_grad():
@@ -36,11 +51,14 @@ async def predict(req: NERRequest):
     logits = outputs.logits
     predictions = torch.argmax(logits, dim=-1)
 
-    # Map predictions to tags
-    pred_tags = []
-    for idx, word_id in enumerate(inputs.word_ids(batch_index=0)):
-        if word_id is not None:
-            tag = model.config.id2label[predictions[0][idx].item()]
-            pred_tags.append({"word": sentence[word_id], "tag": tag})
+    tokens = tokenizer.convert_ids_to_tokens(inputs["input_ids"][0])
+    entities = []
 
-    return {"entities": pred_tags}
+    for idx, token in enumerate(tokens):
+        if token.startswith("##") or token in ["[CLS]", "[SEP]"]:
+            continue
+
+        tag = id2tag[predictions[0][idx].item()]
+        entities.append({"word": token, "tag": tag})
+
+    return {"entities": entities}
